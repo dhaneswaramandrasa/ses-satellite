@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SES from Satellite</title>
+<meta name="description" content="Estimate socio-economic status for every map cell from satellite imagery, first at 1 km and then at 100 m. Real Sentinel-2 imagery of Malang with synthetic survey labels.">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* SES from satellite imagery: estimate socio-economic status for every 1 km and 100 m cell of Malang. Data from data/ses.json, written by scripts/build_data.py. */
+:root { --bg: #0b0d17; --panel: rgba(14,16,28,.88); --fg: #f4f4f8; --muted: #9298b0; --ink2: #c9cbd8; --line: rgba(255,255,255,.12); --accent: #9a9df0; --hot: #ff9f43; --well: rgba(255,255,255,.06); --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14.5px/1.5 "Archivo", -apple-system, "Helvetica Neue", Arial, sans-serif; overflow: hidden; }
+#map { position: fixed; inset: 0; }
+.panel, .card { position: absolute; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.45); overflow: auto; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.panel { top: 16px; left: 16px; width: 360px; max-height: calc(100% - 32px); padding: 18px 20px 14px; }
+.card { top: 16px; right: 16px; width: 320px; max-height: calc(100% - 110px); padding: 16px 18px 14px; }
+.card:empty { display: none; }
+.kick { font: 500 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font-weight: 800; font-size: 28px; letter-spacing: -0.03em; line-height: 1.04; margin: 10px 0 0; }
+.lede { margin: 10px 0 0; color: var(--ink2); }
+.pill { display: inline-block; margin-top: 10px; font: 500 10.5px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--accent); border: 1.5px solid var(--accent); border-radius: 999px; padding: 2px 9px; }
+.steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin: 16px 0 0; }
+.steps button { font: 500 10px var(--mono); letter-spacing: .03em; text-transform: uppercase; color: var(--muted); background: none; border: 0; border-top: 3px solid var(--line); padding: 7px 0 0; text-align: left; cursor: pointer; }
+.steps button[aria-current="step"] { color: var(--accent); border-top-color: var(--accent); }
+.steps button.done { border-top-color: #b9bbe6; }
+.step h2 { margin: 14px 0 0; font-size: 19px; font-weight: 800; letter-spacing: -0.01em; }
+.step p { margin: 6px 0 0; color: var(--ink2); font-size: 13.5px; }
+.sec { margin: 14px 0 6px; font: 500 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.sec small { letter-spacing: 0; text-transform: none; }
+.nav { display: flex; justify-content: space-between; margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+button.b, .chips button { font: 600 12.5px "Archivo", sans-serif; color: var(--fg); background: var(--well); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+button.b:hover, .chips button:hover { border-color: var(--accent); color: var(--accent); }
+button.b.go { background: var(--accent); border-color: var(--accent); color: #0b0d17; }
+button.b:disabled { opacity: .35; cursor: default; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chips button { font-size: 12px; padding: 3px 10px; display: inline-flex; gap: 6px; align-items: center; }
+.chips button i { width: 9px; height: 9px; border-radius: 50%; }
+.chips button[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: #0b0d17; }
+.big { font-weight: 800; font-size: 38px; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+.big small { font-size: 15px; font-weight: 700; margin-left: 2px; }
+.sub { font: 12px var(--mono); color: var(--muted); margin-top: 3px; }
+.bars { display: grid; grid-template-columns: 132px 1fr 44px; gap: 5px 8px; align-items: center; font-size: 12.5px; }
+.bars .tr { position: relative; height: 9px; background: var(--well); border-radius: 2px; }
+.bars .tr::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--muted); }
+.bars .tr b { position: absolute; top: 0; bottom: 0; border-radius: 2px; transition: all .5s; }
+.bars .v { font: 11.5px var(--mono); color: var(--muted); text-align: right; }
+.bars .off { opacity: .35; }
+.bars.pos .tr::after { display: none; }
+.kv { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.kv div { background: var(--well); border-radius: 8px; padding: 7px 9px; }
+.kv b { display: block; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.kv span { font: 10.5px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
+select { width: 100%; font: 600 13px "Archivo", sans-serif; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #1a1d2e; color: var(--fg); }
+.ctl { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; font-size: 12.5px; margin-top: 6px; }
+.ctl input { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+.ctl b { font: 600 12.5px var(--mono); }
+ol.short { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+ol.short li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px; background: var(--well); cursor: pointer; font-size: 12.5px; }
+ol.short li:hover, ol.short li.on { outline: 1px solid var(--hot); }
+ol.short li i { font: 700 12px var(--mono); font-style: normal; color: var(--hot); }
+ol.short li span { font: 11px var(--mono); color: var(--muted); }
+ol.short li b { font: 600 12.5px var(--mono); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink2); margin-top: 8px; }
+.legend i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; border-radius: 50%; }
+.legend i.sq { border-radius: 1px; } .legend i.ring { background: none !important; border: 2px solid var(--hot); border-radius: 1px; }
+.ramp { height: 8px; border-radius: 2px; margin-top: 6px; }
+.rampl { display: flex; justify-content: space-between; font: 10.5px var(--mono); color: var(--muted); margin-top: 3px; }
+svg.sc { width: 100%; height: auto; display: block; margin-top: 4px; }
+svg.sc text { fill: var(--muted); font: 10px var(--mono); }
+.foot { margin: 12px 0 0; font-size: 11.5px; color: var(--muted); }
+.foot a { color: var(--accent); text-decoration: none; }
+.tt { position: absolute; z-index: 3; pointer-events: none; background: #1a1d2e; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; box-shadow: 0 8px 24px rgba(20,20,40,.18); display: none; max-width: 260px; }
+.tt span { display: block; font: 11px var(--mono); color: var(--muted); }
+.maplibregl-ctrl-group { background: #1a1d2e; } .maplibregl-ctrl-group button + button { border-top-color: rgba(255,255,255,.1); }
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1); }
+.maplibregl-ctrl-attrib { background: rgba(14,16,28,.7) !important; color: var(--muted); } .maplibregl-ctrl-attrib a { color: var(--muted); }
+body.embed .panel, body.embed .card { display: none; }
+@media (max-width: 860px) {
+  .panel { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-height: 52%; border-radius: 14px 14px 0 0; padding: 14px 16px 10px; }
+  h1 { font-size: 22px; } .lede, .pill { display: none; }
+  .card { top: 10px; left: 10px; right: 10px; width: auto; max-height: 30%; padding: 10px 14px; }
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <p class="kick">Geospatial ML · demo</p>
+  <h1>Socio-economic status from satellite imagery</h1>
+  <p class="lede">Learn what wealth looks like from above using a coarse survey, then estimate it for every 1&nbsp;km cell of Malang, and again for every 100&nbsp;m cell.</p>
+  <span class="pill">Real Sentinel-2 imagery · synthetic survey labels</span>
+  <div class="steps" id="steps"></div>
+  <div class="step" id="step"></div>
+  <div class="nav"><button class="b" id="prev">← Back</button><button class="b go" id="next">Next →</button></div>
+  <p class="foot">Method from <a href="https://dhaneswara-mandrasa.vercel.app/project-ses-satellite">the case study</a> · <a href="https://github.com/dhaneswaramandrasa/ses-satellite">code</a> · Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0)</p>
+</div>
+<div class="card" id="card"></div>
+<div class="tt" id="tt"></div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  var MOBILE = matchMedia('(max-width: 860px)').matches;
+  if (/[?&]embed/.test(location.search)) document.body.classList.add('embed');
+  var D, NF, NC;
+  var STEPS = ['Image', 'Survey', 'Learn', '1 km', '100 m'];
+  var CENTER = [112.635, -7.975], ZOOM = (MOBILE ? 10.9 : 12.1) + (document.body.classList.contains('embed') ? .6 : 0);
+  var S = { step: 0, feat: 'greenness', cmp: false };
+  var $ = function (id) { return document.getElementById(id); };
+  function mix(a, b, t) { return [0, 1, 2].map(function (i) { return Math.round(a[i] + (b[i] - a[i]) * t); }); }
+  // low SES warm/dark, high SES cool/bright
+  var RAMP = [[120, 30, 60], [200, 70, 70], [245, 160, 90], [250, 230, 160], [150, 210, 240], [90, 140, 250]];
+  function ramp(t) { t = Math.max(0, Math.min(1, t)) * (RAMP.length - 1); var i = Math.min(RAMP.length - 2, Math.floor(t)); return mix(RAMP[i], RAMP[i + 1], t - i); }
+  function rampCss() { return 'linear-gradient(90deg,' + RAMP.map(function (c) { return 'rgb(' + c + ')'; }).join(',') + ')'; }
+  var GREY = [[20, 20, 30], [235, 235, 245]];
+  function grey(t) { return mix(GREY[0], GREY[1], t); }
+
+  var map = new maplibregl.Map({ container: 'map', style: 'https://tiles.openfreemap.org/styles/dark',
+    center: CENTER, zoom: ZOOM, pitch: 0, bearing: 0, attributionControl: { compact: true, customAttribution: 'Sentinel-2 cloudless 2016 © EOX (CC BY 4.0)' } });
+  var overlay = new deck.MapboxOverlay({ interleaved: true, layers: [] });
+  map.addControl(overlay);
+  window.sesMap = map;
+  map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'bottom-right');
+
+  function poly(i, j, st, g) { var x = D.meta.bbox[0] + j * st, y = D.meta.bbox[1] + i * st; g = st * (g || 0);
+    return [[x + g, y + g], [x + st - g, y + g], [x + st - g, y + st - g], [x + g, y + st - g]]; }
+  function fine(c) { return poly(Math.floor(c / D.meta.nx), c % D.meta.nx, D.meta.step, .04); }
+  function coarseP(c) { return poly(Math.floor(c / NC), c % NC, D.meta.step * D.meta.k, .03); }
+
+  function layers() {
+    var st = S.step, out = [];
+    var cIdx = D.est1k.map(function (v, i) { return i; }), fIdx = D.est100.map(function (v, i) { return i; });
+    if (st === 1) out.push(new deck.SolidPolygonLayer({ id: 'survey', data: cIdx, pickable: true, getPolygon: coarseP,
+      getFillColor: function (c) { return D.sampled[c] ? ramp(D.label1k[c] / 100).concat(200) : [0, 0, 0, 0]; }, onHover: hover }));
+    if (st === 1) out.push(new deck.PolygonLayer({ id: 'survey-edge', data: cIdx, filled: false, stroked: true, getPolygon: coarseP,
+      getLineColor: function (c) { return D.sampled[c] ? [255, 255, 255, 120] : [255, 255, 255, 40]; }, lineWidthUnits: 'pixels', getLineWidth: 1 }));
+    if (st === 2) { var f = D.feat[S.feat]; out.push(new deck.SolidPolygonLayer({ id: 'feat', data: fIdx, pickable: true, getPolygon: fine,
+      getFillColor: function (c) { return grey(f[c] / 100).concat(170); }, updateTriggers: { getFillColor: S.feat }, onHover: hover })); }
+    if (st === 3 || (st === 4 && S.cmp)) out.push(new deck.SolidPolygonLayer({ id: 'est1k', data: cIdx, pickable: true, extruded: true, getPolygon: coarseP,
+      getElevation: function (c) { return 40 + D.est1k[c] * 9; }, getFillColor: function (c) { return ramp(D.est1k[c] / 100).concat(230); },
+      transitions: { getElevation: 600 }, material: { ambient: .5, diffuse: .6 }, onHover: hover }));
+    if (st === 4 && !S.cmp) out.push(new deck.SolidPolygonLayer({ id: 'est100', data: fIdx, pickable: true, extruded: true, getPolygon: fine,
+      getElevation: function (c) { return 20 + D.est100[c] * 9; }, getFillColor: function (c) { return ramp(D.est100[c] / 100).concat(235); },
+      material: { ambient: .5, diffuse: .6 }, onHover: hover }));
+    return out;
+  }
+  function draw() {
+    if (map.getLayer('img')) map.setPaintProperty('img', 'raster-opacity', S.step === 0 ? 1 : S.step === 2 ? .6 : .4);
+    overlay.setProps({ layers: layers() });
+  }
+  function addImage() {
+    var b = D.meta.image.bounds;
+    map.addSource('img', { type: 'image', url: D.meta.image.url, coordinates: [[b[0], b[3]], [b[2], b[3]], [b[2], b[1]], [b[0], b[1]]] });
+    map.addLayer({ id: 'img', type: 'raster', source: 'img', paint: { 'raster-opacity': 1, 'raster-opacity-transition': { duration: 500 } } });
+    draw();
+  }
+
+  function word(v) { return v < 20 ? 'much lower' : v < 40 ? 'lower' : v < 60 ? 'middle' : v < 80 ? 'higher' : 'much higher'; }
+  function hover(info) {
+    var tt = $('tt');
+    if (info.object == null) { tt.style.display = 'none'; return; }
+    var c = info.object, id = info.layer.id, html;
+    if (id === 'survey') html = '<b>Survey average: ' + D.label1k[c] + '</b> / 100<span>1 km cell, ' + word(D.label1k[c]) + ' SES</span>';
+    else if (id === 'feat') html = '<b>' + D.feat[S.feat][c] + '</b> / 100<span>' + D.meta.features.find(function (f) { return f.key === S.feat; }).label + ', 100 m patch</span>';
+    else if (id === 'est1k') html = '<b>Estimated SES: ' + D.est1k[c] + '</b> / 100<span>1 km cell, ' + word(D.est1k[c]) + (D.sampled[c] ? '' : ', no survey here') + '</span>';
+    else html = '<b>Estimated SES: ' + D.est100[c] + '</b> / 100<span>100 m cell, ' + word(D.est100[c]) + '</span>';
+    tt.innerHTML = html; tt.style.display = 'block'; tt.style.left = info.x + 14 + 'px'; tt.style.top = info.y + 10 + 'px';
+  }
+
+  function legendRamp(a, b) { return '<div class="ramp" style="background:' + rampCss() + '"></div><div class="rampl"><span>' + a + '</span><span>' + b + '</span></div>'; }
+  function scatter() {
+    var cv = D.cv, W = 300, H = 150, all = [].concat.apply([], cv), lo = Math.min.apply(null, all) - .1, hi = Math.max.apply(null, all) + .1;
+    function x(v) { return 26 + (v - lo) / (hi - lo) * (W - 34); } function y(v) { return H - 18 - (v - lo) / (hi - lo) * (H - 26); }
+    return '<svg class="sc" viewBox="0 0 ' + W + ' ' + H + '"><line x1="' + x(lo) + '" y1="' + y(lo) + '" x2="' + x(hi) + '" y2="' + y(hi) + '" stroke="rgba(255,255,255,.25)" stroke-dasharray="4 4"/>' +
+      cv.map(function (p) { return '<circle cx="' + x(p[0]).toFixed(1) + '" cy="' + y(p[1]).toFixed(1) + '" r="3" fill="#9a9df0" fill-opacity=".8"/>'; }).join('') +
+      '<text x="' + (W - 4) + '" y="' + (H - 4) + '" text-anchor="end">survey SES →</text><text x="4" y="10">↑ estimated from image (held out)</text></svg>';
+  }
+  function weightBars() {
+    var ws = D.weights.slice().sort(function (a, b) { return b.w - a.w; }), mx = ws[0].w;
+    return '<div class="bars pos">' + ws.map(function (w) { var f = D.meta.features.find(function (x) { return x.key === w.key; });
+      return '<span>' + f.label + '</span><div class="tr"><b style="background:#9a9df0;left:0;width:' + (w.w / mx * 100) + '%"></b></div><span class="v">' + w.w.toFixed(2) + '</span>'; }).join('') + '</div>';
+  }
+
+  function renderStep() {
+    $('steps').innerHTML = STEPS.map(function (s, i) { return '<button data-i="' + i + '"' + (i === S.step ? ' aria-current="step"' : '') + (i < S.step ? ' class="done"' : '') + '>' + (i + 1) + ' ' + s + '</button>'; }).join('');
+    var h = '', card = '', st = S.step, m = D.meta, ns = D.sampled.filter(Boolean).length;
+    if (st === 0) {
+      h = '<h2>Start from the image</h2><p>A cloud-free Sentinel-2 mosaic of Malang, East Java, at about 10&nbsp;m per pixel. Roofs, roads, trees and how tightly houses are packed are all visible from above. Zoom in to look.</p>';
+      card = '<p class="sec">Study area</p><div class="kv"><div><b>' + (m.nx * m.ny).toLocaleString() + '</b><span>100 m cells</span></div><div><b>' + (D.est1k.length) + '</b><span>1 km cells</span></div></div><p class="note">Each 100&nbsp;m cell becomes one small image patch, about 20 × 20 pixels.</p>';
+    } else if (st === 1) {
+      h = '<h2>Get labels from a coarse survey</h2><p>Household surveys report socio-economic status as an average over a large area, and only for some areas. Here ' + ns + ' of ' + D.est1k.length + ' 1&nbsp;km cells have a survey value. The rest are blank; the image has to fill them in.</p>';
+      card = '<p class="sec">Survey SES, 1 km average</p>' + legendRamp('lower', 'higher') + '<div class="kv"><div><b>' + ns + '</b><span>surveyed cells</span></div><div><b>' + (D.est1k.length - ns) + '</b><span>no survey</span></div></div><p class="note">Synthetic. In the real project these came from survey and census data.</p>';
+    } else if (st === 2) {
+      h = '<h2>Learn what wealth looks like from above</h2><p>Every patch goes through a small bank of convolution filters (edges, fine texture) plus colour and greenness channels, pooled over the patch and its neighbourhood. A regularised model then maps those features to the survey value. Pick a feature to see it.</p>' +
+        '<p class="sec">Image feature</p><select id="feat">' + Object.keys(D.feat).map(function (k) { return '<option value="' + k + '"' + (k === S.feat ? ' selected' : '') + '>' + m.features.find(function (f) { return f.key === k; }).label + '</option>'; }).join('') + '</select>';
+      card = '<p class="sec">Held-out fit, 1 km</p><div class="big">' + Math.round(m.r2 * 100) + '<small>%</small></div><div class="sub">of survey variance explained (5-fold CV R²)</div>' + scatter() +
+        '<p class="sec">What the model leans on <small>(weight size)</small></p>' + weightBars();
+    } else if (st === 3) {
+      h = '<h2>Estimate SES for every 1 km cell</h2><p>The fitted model scores every cell from its image alone, including the ones the survey never reached. Taller and bluer means higher estimated status.</p>';
+      card = '<p class="sec">Estimated SES, 1 km</p>' + legendRamp('lower', 'higher') + '<p class="note">A useful first map, but one number per square kilometre. A rich block and a poor block next to it average into one middling value.</p>';
+    } else {
+      h = '<h2>Refine to 100 m</h2><p>The same model, applied to each 100&nbsp;m patch: one hundred values where the 1&nbsp;km map had one. Toggle to compare.</p>' +
+        '<div class="chips" id="cmp"><button data-v="0" aria-pressed="' + !S.cmp + '">100 m</button><button data-v="1" aria-pressed="' + S.cmp + '">1 km</button></div>';
+      card = '<p class="sec">Estimated SES, 100 m</p>' + legendRamp('lower', 'higher') + '<div class="kv"><div><b>' + Math.round(m.r2_fine * 100) + '%</b><span>100 m map vs truth</span></div><div><b>' + Math.round(m.r2_flat * 100) + '%</b><span>1 km map vs truth</span></div></div>' +
+        '<p class="note">Share of the fine-scale pattern each map recovers (R²), checked against the hidden synthetic SES the model never saw.</p>';
+    }
+    $('step').innerHTML = h; $('card').innerHTML = card;
+    $('prev').disabled = st === 0; $('next').disabled = st === STEPS.length - 1;
+    if ($('feat')) $('feat').onchange = function () { S.feat = this.value; renderStep(); draw(); };
+    if ($('cmp')) $('cmp').onclick = function (e) { var b = e.target.closest('button'); if (!b) return; S.cmp = b.dataset.v === '1'; renderStep(); draw(); };
+  }
+  function go(i) {
+    var was = S.step; S.step = Math.max(0, Math.min(STEPS.length - 1, i));
+    if ((S.step >= 3) !== (was >= 3)) map.easeTo({ pitch: S.step >= 3 ? 52 : 0, bearing: S.step >= 3 ? -18 : 0, zoom: S.step >= 3 ? ZOOM - .5 : ZOOM, center: CENTER, duration: 900 });
+    renderStep(); draw();
+  }
+  $('prev').onclick = function () { go(S.step - 1); };
+  $('next').onclick = function () { go(S.step + 1); };
+  $('steps').onclick = function (e) { var b = e.target.closest('button'); if (b) go(+b.dataset.i); };
+
+  fetch('data/ses.json').then(function (r) { return r.json(); }).then(function (d) {
+    D = d; NC = d.meta.nx / d.meta.k;
+    if (map.isStyleLoaded()) addImage(); else map.once('load', addImage);
+    var m = /[?&]step=(\d)/.exec(location.search); var s = m ? +m[1] : 0;
+    if (s >= 3) map.jumpTo({ pitch: 52, bearing: -18, zoom: ZOOM - .5 }); S.step = s; go(s);
+  });
+})();
+</script>
+</body>
+</html>
